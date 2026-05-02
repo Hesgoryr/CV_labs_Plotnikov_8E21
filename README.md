@@ -23,20 +23,15 @@
 image1=cv2.imread('Lab_1_pictures/Filters/DSC01644.JPG') # Кот на диване баланс
 image2=cv2.imread('Lab_1_pictures/Filters/DSC01645.JPG') # Кот на диване тёплый
 image3=cv2.imread('Lab_1_pictures/Filters/DSC01649_NOIZEE.jpg') # Морда кота зашумлённая
-image4=cv2.imread('Lab_1_pictures/Filters/photo_2026-04-11_17-51-54.jpg') # Максим с гитарой
 image5=cv2.imread('Lab_1_pictures/AntonAntonDipDipDeDon/VideoCapture_20240130-182722(1).jpg') # Антон в корридоре
 image6=cv2.imread('Lab_1_pictures/Filters/20221205_003642.jpg') # Максим в корридоре пересвет
-image7=cv2.imread('Lab_1_pictures/Filters/20240824_134749.jpg') # Котята
-image8=cv2.imread('Lab_1_pictures/dmAaD.jpg') # Круг трансмутации
-image9=cv2.imread('Lab_1_pictures/Filters/IMG_20220524_143433.jpg') # Я в недосвете
 image10=cv2.imread('Lab_1_pictures/DSC01626.JPG') # Кошка (я хз зачем)
 
 image = [image1, 
          image2, 
          image3,  
          image5, 
-         image6, 
-         image8, 
+         image6,  
          image10]
 ```
 <img width="1990" height="993" alt="image" src="https://github.com/user-attachments/assets/a6313aa3-9000-428e-a4a9-1adfcf1049c8" />
