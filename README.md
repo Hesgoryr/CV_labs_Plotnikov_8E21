@@ -2162,320 +2162,1052 @@ draw_trajectory_generic(cam_positions, labels, 'Траектория камер�
 <img width="786" height="467" alt="image" src="https://github.com/user-attachments/assets/4ea40612-a934-4541-a20c-5c0a7e401d56" />
 <img width="786" height="460" alt="image" src="https://github.com/user-attachments/assets/a61a40fa-f560-4378-bfaf-5b26a47e7e9b" />
 
-```python
 
-```
 
-```python
 
-```
+# Лабораторная работа 4
+## Определения количества пальцев одной руки на изображении
+### Выполнил: студент группы 8Е21 Плотников Юрий Андреевич
+
+Импорт библиотек
 
 ```python
+import os
+import copy
+import time
+import random
+import numpy as np
+import matplotlib.pyplot as plt
 
-```
+from PIL import Image
+from tqdm import tqdm
 
-```python
+import torch
+import torch.nn as nn
+import torch.optim as optim
 
-```
+from torchvision import datasets, transforms, models
+from torch.utils.data import DataLoader, random_split
 
-```python
+from sklearn.metrics import classification_report, confusion_matrix
 
-```
+import cv2
 
-```python
+SEED = 42
 
-```
+random.seed(SEED)
+np.random.seed(SEED)
 
-```python
+torch.manual_seed(SEED)
 
+torch.cuda.manual_seed_all(SEED)
+
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 ```
 
-```python
+Настройка устройства
 
-```
 
 ```python
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+print("Device:", device)
+
+if torch.cuda.is_available():
+    print("GPU:", torch.cuda.get_device_name(0))
 ```
+Device: cuda
 
-```python
+GPU: NVIDIA GeForce RTX 3060 Laptop GPU
 
-```
 
+Параметры
 ```python
+IMAGE_SIZE = 128
+BATCH_SIZE = 64
+EPOCHS = 20
+LR = 3e-4
 
+DATASET_PATH = r"D:\Libraries\Documents\VScode\CV_labs_Plotnikov_8E21\Lab_4\dataset\Finger_Count_Images_Dataset"
 ```
 
-```python
+Для RTX 3060 6GB batch=32 обычно безопасен.
 
-```
+Аугментации и preprocessing
 
 ```python
+train_transforms = transforms.Compose([
+    transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
 
-```
+    transforms.RandomHorizontalFlip(p=0.5),
 
-```python
+    transforms.RandomRotation(15),
 
-```
+    transforms.ColorJitter(
+        brightness=0.2,
+        contrast=0.2,
+        saturation=0.2
+    ),
 
-```python
+    transforms.RandomAffine(
+        degrees=0,
+        translate=(0.1, 0.1),
+        scale=(0.9, 1.1)
+    ),
 
-```
+    transforms.ToTensor(),
 
-```python
+    transforms.Normalize(
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225]
+    )
+])
 
+test_transforms = transforms.Compose([
+    transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
+    transforms.ToTensor(),
+
+    transforms.Normalize(
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225]
+    )
+])
 ```
 
+Загрузка датасета и split
+
 ```python
+full_train_dataset = datasets.ImageFolder(
+    root=DATASET_PATH,
+    transform=train_transforms
+)
 
-```
+full_eval_dataset = datasets.ImageFolder(
+    root=DATASET_PATH,
+    transform=test_transforms
+)
 
-```python
+indices = torch.randperm(len(full_train_dataset)).tolist()
 
-```
+train_size = int(0.7 * len(indices))
+val_size = int(0.15 * len(indices))
 
-```python
+train_idx = indices[:train_size]
 
-```
+val_idx = indices[
+    train_size:train_size + val_size
+]
 
-```python
+test_idx = indices[
+    train_size + val_size:
+]
 
-```
+from torch.utils.data import Subset
 
-```python
+train_dataset = Subset(
+    full_train_dataset,
+    train_idx
+)
 
-```
+val_dataset = Subset(
+    full_eval_dataset,
+    val_idx
+)
 
-```python
+test_dataset = Subset(
+    full_eval_dataset,
+    test_idx
+)
 
-```
+class_names = full_train_dataset.classes
 
-```python
+print("Classes:", class_names)
 
+print("Train:", len(train_dataset))
+print("Validation:", len(val_dataset))
+print("Test:", len(test_dataset))
 ```
 
-```python
+Classes: ['0', '1', '2', '3', '4', '5']
 
-```
+Train: 4443
 
-```python
+Validation: 952
 
-```
+Test: 953
 
-```python
+Разделение:
+- 70% train
+- 15% validation
+- 15% test
 
-```
+DataLoader
 
 ```python
+train_loader = DataLoader(
+    train_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=True,
+    num_workers=2,
+    pin_memory=True
+)
 
+val_loader = DataLoader(
+    val_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=True,
+    num_workers=2,
+    pin_memory=True
+)
+
+test_loader = DataLoader(
+    test_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=True,
+    num_workers=2,
+    pin_memory=True
+)
 ```
 
-```python
+Модель EfficientNet-B0
 
+```python
+model = models.efficientnet_b0(weights="IMAGENET1K_V1")
 ```
 
-```python
+Меняем classifier под 6 классов:
 
+```python
+num_features = model.classifier[1].in_features
+model.classifier[1] = nn.Linear(num_features, 6)
+model = model.to(device)
 ```
+
+Loss и optimizer
 
 ```python
+criterion = nn.CrossEntropyLoss()
 
-```
+optimizer = optim.Adam(
+    model.parameters(),
+    lr=LR
+)
 
-```python
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer,
+    mode='min',
+    patience=2,
+    factor=0.5
+)
 
+scaler = torch.amp.GradScaler('cuda')
 ```
 
-```python
+Проверка количества классов
 
+```python
+print(class_names)
 ```
 
+['0', '1', '2', '3', '4', '5']
+
 ```python
 
 ```
+
+Функция обучения
 
 ```python
+def train_model(model, train_loader, val_loader):
 
-```
+    os.makedirs("saved_epochs", exist_ok=True)
 
-```python
+    train_losses = []
+    val_losses = []
 
-```
+    best_acc = 0.0
 
-```python
+    for epoch in range(EPOCHS):
 
-```
+        print(f"\nEpoch {epoch+1}/{EPOCHS}")
 
-```python
+        # =========================
+        # TRAIN
+        # =========================
+        model.train()
 
-```
+        running_loss = 0.0
+        running_corrects = 0
 
-```python
+        for inputs, labels in tqdm(train_loader):
 
-```
+            inputs = inputs.to(device)
+            labels = labels.to(device)
 
-```python
+            optimizer.zero_grad()
 
-```
+            with torch.amp.autocast('cuda'):
 
-```python
+                outputs = model(inputs)
 
-```
+                loss = criterion(outputs, labels)
 
-```python
+                _, preds = torch.max(outputs, 1)
 
-```
+            scaler.scale(loss).backward()
 
-```python
+            scaler.step(optimizer)
 
-```
+            scaler.update()
 
-```python
+            running_loss += loss.item() * inputs.size(0)
 
-```
+            running_corrects += torch.sum(preds == labels.data)
 
-```python
+        epoch_loss = running_loss / len(train_loader.dataset)
 
-```
+        epoch_acc = (
+            running_corrects.double() /
+            len(train_loader.dataset)
+        ).item()
 
-```python
+        train_losses.append(epoch_loss)
 
-```
+        # =========================
+        # VALIDATION
+        # =========================
+        model.eval()
 
-```python
+        val_running_loss = 0.0
+        val_running_corrects = 0
 
-```
+        with torch.no_grad():
 
-```python
+            for inputs, labels in val_loader:
 
-```
+                inputs = inputs.to(device)
+                labels = labels.to(device)
 
-```python
+                outputs = model(inputs)
 
-```
+                _, preds = torch.max(outputs, 1)
 
-```python
+                loss = criterion(outputs, labels)
 
-```
+                val_running_loss += loss.item() * inputs.size(0)
 
-```python
+                val_running_corrects += torch.sum(
+                    preds == labels.data
+                )
 
-```
+        val_loss = (
+            val_running_loss /
+            len(val_loader.dataset)
+        )
 
-```python
+        val_acc = (
+            val_running_corrects.double() /
+            len(val_loader.dataset)
+        ).item()
 
-```
+        val_losses.append(val_loss)
 
-```python
+        scheduler.step(val_loss)
 
-```
+        print(f"Train Loss: {epoch_loss:.4f}")
+        print(f"Train Acc : {epoch_acc:.4f}")
 
-```python
+        print(f"Val Loss  : {val_loss:.4f}")
+        print(f"Val Acc   : {val_acc:.4f}")
 
-```
+        # ====================================
+        # СОХРАНЯЕМ ТЕКУЩУЮ ЭПОХУ
+        # ====================================
+        checkpoint = {
+            'epoch': epoch + 1,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'train_loss': epoch_loss,
+            'val_loss': val_loss,
+            'train_acc': epoch_acc,
+            'val_acc': val_acc
+        }
 
-```python
+        epoch_path = (
+            f"saved_epochs/"
+            f"epoch_{epoch+1}_"
+            f"valacc_{val_acc:.4f}.pth"
+        )
 
-```
+        torch.save(checkpoint, epoch_path)
 
-```python
+        print(f"Saved: {epoch_path}")
 
-```
+        # ====================================
+        # СОХРАНЯЕМ ЛУЧШУЮ МОДЕЛЬ
+        # ====================================
+        if val_acc > best_acc:
 
-```python
+            best_acc = val_acc
 
-```
+            best_model_path = "saved_epochs/best_model.pth"
 
-```python
+            torch.save(checkpoint, best_model_path)
 
-```
+            print(
+                f"New best model saved "
+                f"(val_acc={val_acc:.4f})"
+            )
 
-```python
+    print(f"\nBest validation accuracy: {best_acc:.4f}")
 
+    return model, train_losses, val_losses
 ```
 
-```python
+Сделаем финальную проверку перед обучением
 
+```python
+images, labels = next(iter(train_loader))
+print(images.shape)
+print(labels.shape)
+print(labels[:10])
 ```
 
-```python
+torch.Size([64, 3, 128, 128])
 
-```
+torch.Size([64])
 
-```python
+tensor([2, 4, 3, 2, 2, 4, 0, 3, 2, 4])
 
+```python
+sample_img, sample_label = train_dataset[0]
+print(sample_img.shape)
+print(sample_label)
 ```
 
-```python
+torch.Size([3, 128, 128])
 
-```
+3
 
-```python
+Обучение
 
+```python
+model, train_losses, val_losses = train_model(
+    model,
+    train_loader,
+    val_loader
+)
 ```
+Epoch 1/20
+100%|██████████| 70/70 [01:30<00:00,  1.29s/it]
 
-```python
+Train Loss: 1.4809
 
-```
+Train Acc : 0.3907
 
-```python
+Val Loss  : 1.0349
 
-```
+Val Acc   : 0.5746
 
-```python
+Saved: saved_epochs/epoch_1_valacc_0.5746.pth
 
-```
+New best model saved (val_acc=0.5746)
 
-```python
+Epoch 2/20
 
-```
+100%|██████████| 70/70 [01:17<00:00,  1.11s/it]
 
-```python
+Train Loss: 0.9238
 
-```
+Train Acc : 0.6415
 
-```python
+Val Loss  : 0.7682
 
-```
+Val Acc   : 0.6954
 
-```python
+Saved: saved_epochs/epoch_2_valacc_0.6954.pth
 
-```
+New best model saved (val_acc=0.6954)
 
-```python
+Epoch 3/20
 
-```
+100%|██████████| 70/70 [01:21<00:00,  1.16s/it]
 
-```python
+Train Loss: 0.6799
 
-```
+Train Acc : 0.7463
 
-```python
+Val Loss  : 0.7029
 
-```
+Val Acc   : 0.7363
 
-```python
+Saved: saved_epochs/epoch_3_valacc_0.7363.pth
 
-```
+New best model saved (val_acc=0.7363)
+
+
+
+Epoch 4/20
+
+100%|██████████| 70/70 [01:25<00:00,  1.22s/it]
+
+Train Loss: 0.5430
+
+Train Acc : 0.7943
+
+Val Loss  : 0.6254
+
+Val Acc   : 0.7805
+
+Saved: saved_epochs/epoch_4_valacc_0.7805.pth
+
+New best model saved (val_acc=0.7805)
+
+
+
+Epoch 5/20
+
+100%|██████████| 70/70 [01:28<00:00,  1.27s/it]
+
+Train Loss: 0.4358
+
+Train Acc : 0.8386
+
+Val Loss  : 0.6230
+
+Val Acc   : 0.7826
+
+Saved: saved_epochs/epoch_5_valacc_0.7826.pth
+
+New best model saved (val_acc=0.7826)
+
+
+
+Epoch 6/20
+
+100%|██████████| 70/70 [01:27<00:00,  1.24s/it]
+
+Train Loss: 0.3802
+
+Train Acc : 0.8623
+
+Val Loss  : 0.6166
+
+Val Acc   : 0.7868
+
+Saved: saved_epochs/epoch_6_valacc_0.7868.pth
+
+New best model saved (val_acc=0.7868)
+
+
+
+Epoch 7/20
+
+100%|██████████| 70/70 [01:21<00:00,  1.17s/it]
+
+Train Loss: 0.3062
+
+Train Acc : 0.8843
+
+Val Loss  : 0.5949
+
+Val Acc   : 0.7920
+
+Saved: saved_epochs/epoch_7_valacc_0.7920.pth
+
+New best model saved (val_acc=0.7920)
+
+
+
+Epoch 8/20
+
+100%|██████████| 70/70 [01:24<00:00,  1.21s/it]
 
+Train Loss: 0.2720
+
+Train Acc : 0.8974
+
+Val Loss  : 0.6632
+
+Val Acc   : 0.7920
+
+Saved: saved_epochs/epoch_8_valacc_0.7920.pth
+
+
+
+Epoch 9/20
+
+100%|██████████| 70/70 [01:29<00:00,  1.28s/it]
+
+Train Loss: 0.2300
+
+Train Acc : 0.9187
+
+Val Loss  : 0.6067
+
+Val Acc   : 0.8193
+
+Saved: saved_epochs/epoch_9_valacc_0.8193.pth
+
+New best model saved (val_acc=0.8193)
+
+
+
+Epoch 10/20
+
+100%|██████████| 70/70 [01:24<00:00,  1.21s/it]
+
+Train Loss: 0.1989
+
+Train Acc : 0.9264
+
+Val Loss  : 0.6069
+
+Val Acc   : 0.8088
+
+Saved: saved_epochs/epoch_10_valacc_0.8088.pth
+
+
+
+Epoch 11/20
+
+100%|██████████| 70/70 [01:25<00:00,  1.23s/it]
+
+Train Loss: 0.1647
+
+Train Acc : 0.9390
+
+Val Loss  : 0.5538
+
+Val Acc   : 0.8319
+
+Saved: saved_epochs/epoch_11_valacc_0.8319.pth
+
+New best model saved (val_acc=0.8319)
+
+
+
+Epoch 12/20
+
+100%|██████████| 70/70 [01:24<00:00,  1.21s/it]
+
+Train Loss: 0.1338
+
+Train Acc : 0.9525
+
+Val Loss  : 0.5589
+
+Val Acc   : 0.8309
+
+Saved: saved_epochs/epoch_12_valacc_0.8309.pth
+
+
+
+Epoch 13/20
+
+100%|██████████| 70/70 [01:26<00:00,  1.24s/it]
+
+Train Loss: 0.1085
+
+Train Acc : 0.9617
+
+Val Loss  : 0.5627
+
+Val Acc   : 0.8277
+
+Saved: saved_epochs/epoch_13_valacc_0.8277.pth
+
+
+
+Epoch 14/20
+
+100%|██████████| 70/70 [01:28<00:00,  1.27s/it]
+
+Train Loss: 0.1004
+
+Train Acc : 0.9667
+
+Val Loss  : 0.6036
+
+Val Acc   : 0.8277
+
+Saved: saved_epochs/epoch_14_valacc_0.8277.pth
+
+
+
+Epoch 15/20
+
+100%|██████████| 70/70 [01:22<00:00,  1.18s/it]
+
+Train Loss: 0.0973
+
+Train Acc : 0.9669
+
+Val Loss  : 0.5782
+
+Val Acc   : 0.8330
+
+Saved: saved_epochs/epoch_15_valacc_0.8330.pth
+
+New best model saved (val_acc=0.8330)
+
+
+
+Epoch 16/20
+
+100%|██████████| 70/70 [01:24<00:00,  1.21s/it]
+
+Train Loss: 0.0729
+
+Train Acc : 0.9737
+
+Val Loss  : 0.5570
+
+Val Acc   : 0.8372
+
+Saved: saved_epochs/epoch_16_valacc_0.8372.pth
+
+New best model saved (val_acc=0.8372)
+
+
+
+Epoch 17/20
+
+100%|██████████| 70/70 [01:29<00:00,  1.28s/it]
+
+Train Loss: 0.0757
+
+Train Acc : 0.9750
+
+Val Loss  : 0.5694
+
+Val Acc   : 0.8403
+
+Saved: saved_epochs/epoch_17_valacc_0.8403.pth
+
+New best model saved (val_acc=0.8403)
+
+
+
+Epoch 18/20
+
+100%|██████████| 70/70 [01:27<00:00,  1.25s/it]
+
+Train Loss: 0.0645
+
+Train Acc : 0.9795
+
+Val Loss  : 0.5817
+
+Val Acc   : 0.8351
+
+Saved: saved_epochs/epoch_18_valacc_0.8351.pth
+
+
+
+Epoch 19/20
+
+100%|██████████| 70/70 [01:18<00:00,  1.12s/it]
+
+Train Loss: 0.0553
+
+Train Acc : 0.9842
+
+Val Loss  : 0.5723
+
+Val Acc   : 0.8445
+
+Saved: saved_epochs/epoch_19_valacc_0.8445.pth
+
+New best model saved (val_acc=0.8445)
+
+
+
+Epoch 20/20
+
+100%|██████████| 70/70 [01:23<00:00,  1.19s/it]
+
+Train Loss: 0.0600
+
+Train Acc : 0.9829
+
+Val Loss  : 0.5697
+
+Val Acc   : 0.8414
+
+Saved: saved_epochs/epoch_20_valacc_0.8414.pth
+
+
+Best validation accuracy: 0.8445
+
+
 ```python
+best_checkpoint = torch.load(
+    "saved_epochs/best_model.pth",
+    map_location=device
+)
+
+model.load_state_dict(
+    best_checkpoint['model_state_dict']
+)
+
+model = model.to(device)
+
+model.eval()
 
+print("Loaded best model")
+
+print("Best epoch:", best_checkpoint['epoch'])
+
+print("Best validation accuracy:",
+      best_checkpoint['val_acc'])
 ```
+
+Loaded best model
+
+Best epoch: 19
+
+Best validation accuracy: 0.8445378151260504
+
+Тестирование
 
 ```python
+model.eval()
+
+all_preds = []
+
+all_labels = []
+
+test_correct = 0
+
+test_total = 0
+
+with torch.no_grad(), torch.amp.autocast('cuda'):
+
+    for inputs, labels in test_loader:
 
+        inputs = inputs.to(device)
+        labels = labels.to(device)
+        outputs = model(inputs)
+        _, preds = torch.max(outputs, 1)
+
+        test_correct += torch.sum(
+            preds == labels
+        ).item()
+
+        test_total += labels.size(0)
+
+        all_preds.extend(
+            preds.cpu().numpy()
+        )
+
+        all_labels.extend(
+            labels.cpu().numpy()
+        )
+
+test_accuracy = test_correct / test_total
+
+print(f"\nTest Accuracy: {test_accuracy:.4f}")
 ```
 
-```python
+Test Accuracy: 0.8478
 
+```python
+print(classification_report(
+    all_labels,
+    all_preds,
+    target_names=class_names
+))
 ```
 
+<img width="533" height="290" alt="image" src="https://github.com/user-attachments/assets/73729aaf-759f-4bbb-af83-02c4bf568c54" />
+
 ```python
+cm = confusion_matrix(
+    all_labels,
+    all_preds
+)
+
+plt.figure(figsize=(8, 6))
+plt.imshow(cm)
+plt.title("Confusion Matrix")
+plt.colorbar()
+plt.xticks(
+    range(len(class_names)),
+    class_names
+)
+
+plt.yticks(
+    range(len(class_names)),
+    class_names
+)
 
+plt.xlabel("Predicted")
+
+plt.ylabel("True")
+
+for i in range(len(class_names)):
+    for j in range(len(class_names)):
+
+        plt.text(
+            j,
+            i,
+            cm[i, j],
+            ha='center',
+            va='center'
+        )
+
+plt.show()
 ```
+
+<img width="610" height="547" alt="image" src="https://github.com/user-attachments/assets/8c6a742b-ecc1-4b4c-b507-e0c285a274fe" />
+
+Webcam inference
 
 ```python
+model.eval()
+
+camera_transform = transforms.Compose([
+
+    transforms.ToPILImage(),
+
+    transforms.Resize(
+        (IMAGE_SIZE, IMAGE_SIZE)
+    ),
+
+    transforms.ToTensor(),
+
+    transforms.Normalize(
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225]
+    )
+])
+
+cap = cv2.VideoCapture(0)
 
+while True:
+
+    ret, frame = cap.read()
+
+    if not ret:
+        break
+
+    # =================================
+    # ROI
+    # =================================
+    x1, y1 = 100, 100
+    x2, y2 = 400, 400
+
+    roi = frame[y1:y2, x1:x2]
+
+    # =================================
+    # PREPROCESS
+    # =================================
+    roi_rgb = cv2.cvtColor(
+        roi,
+        cv2.COLOR_BGR2RGB
+    )
+
+    input_tensor = camera_transform(
+        roi_rgb
+    )
+
+    input_tensor = input_tensor.unsqueeze(0)
+
+    input_tensor = input_tensor.to(device)
+
+    # =================================
+    # INFERENCE
+    # =================================
+    with torch.no_grad(), torch.amp.autocast('cuda'):
+
+        outputs = model(input_tensor)
+
+        probabilities = torch.softmax(
+            outputs,
+            dim=1
+        )
+
+        confidence, pred = torch.max(
+            probabilities,
+            1
+        )
+
+        predicted_class = class_names[
+            pred.item()
+        ]
+
+        confidence = confidence.item()
+
+    # =================================
+    # DRAW ROI
+    # =================================
+    cv2.rectangle(
+        frame,
+        (x1, y1),
+        (x2, y2),
+        (0, 255, 0),
+        2
+    )
+
+    # =================================
+    # DRAW TEXT
+    # =================================
+    cv2.putText(
+        frame,
+        f"Finger Count: {predicted_class}",
+        (20, 40),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1,
+        (0, 255, 0),
+        2
+    )
+
+    cv2.putText(
+        frame,
+        f"Confidence: {confidence:.2f}",
+        (20, 80),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1,
+        (0, 255, 0),
+        2
+    )
+
+    cv2.imshow(
+        "Finger Counter",
+        frame
+    )
+
+    key = cv2.waitKey(1)
+
+    if key == 27:
+        break
+
+cap.release()
+
+cv2.destroyAllWindows()
 ```
+
+## Результаты работы 
+<img width="797" height="634" alt="Screenshot 2026-05-08 175844" src="https://github.com/user-attachments/assets/1d0b766d-b2ad-46c5-8b8b-3b350d218f0f" />
+<img width="788" height="644" alt="Screenshot 2026-05-08 175646" src="https://github.com/user-attachments/assets/e2c9e026-8859-476e-ad1a-53921310aa07" />
+<img width="793" height="626" alt="Screenshot 2026-05-08 175618" src="https://github.com/user-attachments/assets/67b24b5f-e5c4-4657-989c-a326a4667df9" />
+<img width="796" height="637" alt="Screenshot 2026-05-08 175529" src="https://github.com/user-attachments/assets/54f6b6dc-0a90-4e23-85fe-baee358b868a" />
+<img width="788" height="630" alt="Screenshot 2026-05-08 175522" src="https://github.com/user-attachments/assets/08576210-aac4-4296-a0c8-c27c034ea81c" />
+<img width="793" height="627" alt="Screenshot 2026-05-08 175459" src="https://github.com/user-attachments/assets/78998fdc-59bd-41c1-88a9-adbde86696da" />
+<img width="791" height="624" alt="Screenshot 2026-05-08 175443" src="https://github.com/user-attachments/assets/c4730639-236c-49f2-9a0b-1ce28e4f6dcf" />
+<img width="795" height="636" alt="Screenshot 2026-05-08 175430" src="https://github.com/user-attachments/assets/cbe7deae-ee8b-46a2-bde1-39e3c4f2a3ba" />
+<img width="790" height="633" alt="Screenshot 2026-05-08 175424" src="https://github.com/user-attachments/assets/372dfa4b-9df5-4aa7-bba1-53a6291a6055" />
+<img width="792" height="631" alt="Screenshot 2026-05-08 175358" src="https://github.com/user-attachments/assets/041dba86-9da4-4f68-8580-7acebe78a4c2" />
+<img width="795" height="629" alt="Screenshot 2026-05-08 175340" src="https://github.com/user-attachments/assets/0d38ad69-fbfc-4562-afdf-0ba656c479b2" />
+<img width="793" height="632" alt="Screenshot 2026-05-08 175329" src="https://github.com/user-attachments/assets/51f5d388-2d16-4eaf-b1f1-2b66d24da164" />
+<img width="798" height="631" alt="Screenshot 2026-05-08 175307" src="https://github.com/user-attachments/assets/ef422ea3-e821-4077-b878-ba39e5b10f8e" />
+<img width="794" height="638" alt="Screenshot 2026-05-08 175219" src="https://github.com/user-attachments/assets/4f12c9c0-a376-403b-9b94-0d183ae55452" />
+<img width="796" height="645" alt="Screenshot 2026-05-08 175200" src="https://github.com/user-attachments/assets/ce429ed2-b0b0-4360-ae17-e3890a39ee33" />
+<img width="791" height="629" alt="Screenshot 2026-05-08 175101" src="https://github.com/user-attachments/assets/d48d78fb-81d2-47a9-a1f9-1369ee81bc22" />
+<img width="798" height="633" alt="Screenshot 2026-05-08 175041" src="https://github.com/user-attachments/assets/94d61714-0952-4146-a02a-fe895f53cc1b" />
 
 
+## Вывод
+В результате выполнения лабораторной работы был реализован классификатор количества пальцев одной руки.
